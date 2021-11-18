@@ -1,13 +1,15 @@
-use crate::error::Error;
-use crate::error::Error::CommandError;
-use serde::de;
-use serde::de::Visitor;
-use serde::{Deserialize, Deserializer};
-use shlex::Shlex;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::net::SocketAddr;
 use std::str::FromStr;
+
+use serde::de;
+use serde::de::Visitor;
+use serde::{Deserialize, Deserializer};
+use shlex::Shlex;
+
+use crate::error::Error;
+use crate::error::Error::CommandError;
 
 #[derive(Deserialize)]
 pub struct Config {

@@ -1,8 +1,9 @@
+use std::future::{ready, Future};
+use std::pin::Pin;
+
 use nix::libc::pid_t;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
-use std::future::{ready, Future};
-use std::pin::Pin;
 use tokio::process::Child;
 
 pub trait TerminateExt {

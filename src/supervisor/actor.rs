@@ -11,14 +11,14 @@ use std::time::{Duration, Instant};
 use actix::fut::{ready, wrap_future};
 use actix::{
     Actor, ActorFuture, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message,
-    ResponseActFuture, ResponseFuture, StreamHandler,
+    ResponseActFuture, ResponseFuture,
 };
-use actix_codec::{AsyncRead, LinesCodec};
 use futures::{ready, FutureExt, Stream, StreamExt};
+use tokio::io::AsyncRead;
 use tokio::process::{Child, Command};
 use tokio::sync::oneshot::Receiver;
 use tokio::sync::{broadcast, oneshot};
-use tokio_util::codec::FramedRead;
+use tokio_util::codec::{FramedRead, LinesCodec};
 
 use crate::config::{Env, Program};
 use crate::error::Error;
@@ -158,7 +158,7 @@ impl Handler<Run> for ProgramActor {
             name: String,
             io_type: IOType,
         ) -> impl Stream<Item = ChildOutput> {
-            FramedRead::new(stdio, LinesCodec::default()).filter_map(move |item| {
+            FramedRead::new(stdio, LinesCodec::new_with_max_length(1024)).filter_map(move |item| {
                 let name = name.clone();
                 async move {
                     item.ok().map(move |line| ChildOutput {

@@ -1,4 +1,5 @@
 #![allow(clippy::enum_variant_names)]
+
 mod config;
 mod error;
 mod logger;
