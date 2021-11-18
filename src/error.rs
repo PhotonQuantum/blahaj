@@ -11,5 +11,5 @@ pub enum Error {
     #[error("Child exited too quickly")]
     AlreadyDiedError,
     #[error("Child exited with non-zero exit code: {0}")]
-    NonZeroExitError(i32)
+    NonZeroExitError(i32),
 }

@@ -13,7 +13,10 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    pub fn start(programs: impl IntoIterator<Item=(String, Program)>, logger: Addr<LoggerActor>) -> Self {
+    pub fn start(
+        programs: impl IntoIterator<Item = (String, Program)>,
+        logger: Addr<LoggerActor>,
+    ) -> Self {
         Self {
             actors: programs
                 .into_iter()

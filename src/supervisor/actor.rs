@@ -8,13 +8,16 @@ use std::process::Stdio;
 use std::task::Poll;
 use std::time::{Duration, Instant};
 
-use actix::{Actor, ActorFuture, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message, ResponseActFuture, ResponseFuture, StreamHandler};
 use actix::fut::{ready, wrap_future};
-use actix_codec::{LinesCodec, AsyncRead};
-use futures::{FutureExt, ready, Stream, StreamExt};
+use actix::{
+    Actor, ActorFuture, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message,
+    ResponseActFuture, ResponseFuture, StreamHandler,
+};
+use actix_codec::{AsyncRead, LinesCodec};
+use futures::{ready, FutureExt, Stream, StreamExt};
 use tokio::process::{Child, Command};
-use tokio::sync::{broadcast, oneshot};
 use tokio::sync::oneshot::Receiver;
+use tokio::sync::{broadcast, oneshot};
 use tokio_util::codec::FramedRead;
 
 use crate::config::{Env, Program};
@@ -51,7 +54,7 @@ pub struct ProgramActor {
     program: Program,
     stop_tx: Option<oneshot::Sender<()>>,
     stopped_tx: Option<broadcast::Sender<()>>,
-    logger: Addr<LoggerActor>
+    logger: Addr<LoggerActor>,
 }
 
 impl ProgramActor {
@@ -61,7 +64,7 @@ impl ProgramActor {
             program,
             stop_tx: None,
             stopped_tx: None,
-            logger
+            logger,
         }
     }
 }
@@ -94,7 +97,7 @@ struct Run(oneshot::Receiver<()>);
 
 impl Handler<Run> for ProgramActor {
     type Result =
-    ResponseFuture<Result<Option<oneshot::Receiver<()>>, (oneshot::Receiver<()>, Error)>>;
+        ResponseFuture<Result<Option<oneshot::Receiver<()>>, (oneshot::Receiver<()>, Error)>>;
 
     fn handle(&mut self, msg: Run, _: &mut Self::Context) -> Self::Result {
         let stop_rx = msg.0;
@@ -106,36 +109,39 @@ impl Handler<Run> for ProgramActor {
         }
         impl WaitAbortFut {
             pub fn new(child: Child, stop_rx: oneshot::Receiver<()>) -> Self {
-                WaitAbortFut { child: Some(child), stop_rx: Some(stop_rx) }
+                WaitAbortFut {
+                    child: Some(child),
+                    stop_rx: Some(stop_rx),
+                }
             }
         }
 
         impl Future for WaitAbortFut {
-            type Output = Result<Result<oneshot::Receiver<()>, Child>, (oneshot::Receiver<()>, Error)>;
+            type Output =
+                Result<Result<oneshot::Receiver<()>, Child>, (oneshot::Receiver<()>, Error)>;
 
-            fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+            fn poll(
+                mut self: Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> Poll<Self::Output> {
                 let mut child = self.child.take().expect("polled twice");
                 let mut stop_rx = self.stop_rx.take().expect("polled twice");
                 match stop_rx.poll_unpin(cx) {
-                    Poll::Ready(_) => {
-                        Poll::Ready(Ok(Err(child)))
-                    }
+                    Poll::Ready(_) => Poll::Ready(Ok(Err(child))),
                     Poll::Pending => {
                         // SAFETY we know that child.wait() doesn't have drop side effect.
                         let mut wait_fut = ManuallyDrop::new(child.wait());
                         let wait_fut_ref = unsafe { Pin::new_unchecked(wait_fut.deref_mut()) };
                         match wait_fut_ref.poll(cx) {
-                            Poll::Ready(res) => {
-                                Poll::Ready(if let Ok(res) = res {
-                                    if res.success() {
-                                        Err((stop_rx, Error::NonZeroExitError(res.code().unwrap_or(0))))
-                                    } else {
-                                        Ok(Ok(stop_rx))
-                                    }
+                            Poll::Ready(res) => Poll::Ready(if let Ok(res) = res {
+                                if res.success() {
+                                    Err((stop_rx, Error::NonZeroExitError(res.code().unwrap_or(0))))
                                 } else {
-                                    Err((stop_rx, Error::AlreadyDiedError))
-                                })
-                            }
+                                    Ok(Ok(stop_rx))
+                                }
+                            } else {
+                                Err((stop_rx, Error::AlreadyDiedError))
+                            }),
                             Poll::Pending => {
                                 self.child = Some(child);
                                 self.stop_rx = Some(stop_rx);
@@ -147,14 +153,18 @@ impl Handler<Run> for ProgramActor {
             }
         }
 
-        fn wrap_stream(stdio: impl AsyncRead, name: String, io_type: IOType) -> impl Stream<Item=ChildOutput> {
-            FramedRead::new(stdio, LinesCodec::default()).filter_map(move |item|{
+        fn wrap_stream(
+            stdio: impl AsyncRead,
+            name: String,
+            io_type: IOType,
+        ) -> impl Stream<Item = ChildOutput> {
+            FramedRead::new(stdio, LinesCodec::default()).filter_map(move |item| {
                 let name = name.clone();
                 async move {
-                    item.ok().map(move |line|ChildOutput{
+                    item.ok().map(move |line| ChildOutput {
                         name: name.clone(),
                         ty: io_type,
-                        data: line
+                        data: line,
                     })
                 }
             })
@@ -164,21 +174,38 @@ impl Handler<Run> for ProgramActor {
         Box::pin(async move {
             match build_child(&program) {
                 Ok(mut child) => {
-                    let stdout = wrap_stream(child.stdout.take().expect("child stdout"),name.clone(),IOType::Stdout);
-                    let stderr = wrap_stream(child.stderr.take().expect("child stderr"),name,IOType::Stderr);
-                    logger.send(RegisterStdio(stdout)).await.expect("register stdout logger");
-                    logger.send(RegisterStdio(stderr)).await.expect("register stderr logger");
+                    let stdout = wrap_stream(
+                        child.stdout.take().expect("child stdout"),
+                        name.clone(),
+                        IOType::Stdout,
+                    );
+                    let stderr = wrap_stream(
+                        child.stderr.take().expect("child stderr"),
+                        name,
+                        IOType::Stderr,
+                    );
+                    logger
+                        .send(RegisterStdio(stdout))
+                        .await
+                        .expect("register stdout logger");
+                    logger
+                        .send(RegisterStdio(stderr))
+                        .await
+                        .expect("register stderr logger");
 
                     let res = WaitAbortFut::new(child, stop_rx).await;
                     match res {
                         Ok(Err(mut child)) => {
-                            if tokio::time::timeout(Duration::from_secs(5), child.terminate()).await.is_err() {
+                            if tokio::time::timeout(Duration::from_secs(5), child.terminate())
+                                .await
+                                .is_err()
+                            {
                                 drop(child.kill().await);
                             }
                             Ok(None)
                         }
                         Ok(Ok(stop_rx)) => Ok(Some(stop_rx)),
-                        Err(e) => Err(e)
+                        Err(e) => Err(e),
                     }
                 }
                 Err(e) => Err((stop_rx, e)),
@@ -255,7 +282,7 @@ impl Handler<Daemon> for ProgramActor {
             factory: F,
             fut: Option<Fut>,
             state: Option<I>,
-            retry_guard: RetryGuard
+            retry_guard: RetryGuard,
         }
         impl<F, Fut, I> RepeatedActFut<F, Fut, I> {
             pub fn new(factory: F, initial_state: I, retry_guard: RetryGuard) -> Self {
@@ -263,16 +290,16 @@ impl Handler<Daemon> for ProgramActor {
                     factory,
                     fut: None,
                     state: Some(initial_state),
-                    retry_guard
+                    retry_guard,
                 }
             }
         }
         impl<A, Fut, F, I> ActorFuture<A> for RepeatedActFut<F, Fut, I>
-            where
-                A: Actor,
-                Fut: ActorFuture<A, Output=Option<I>>,
-                F: Fn(I) -> Fut + Unpin,
-                I: Unpin,
+        where
+            A: Actor,
+            Fut: ActorFuture<A, Output = Option<I>>,
+            F: Fn(I) -> Fut + Unpin,
+            I: Unpin,
         {
             type Output = ();
 
@@ -289,7 +316,10 @@ impl Handler<Daemon> for ProgramActor {
                         Some(res) => {
                             // Fut finished but need to be recreated, this means that process exited
                             // SAFETY RetryGuard is Unpin
-                            if unsafe{Pin::get_unchecked_mut(self.as_mut())}.retry_guard.mark() {
+                            if unsafe { Pin::get_unchecked_mut(self.as_mut()) }
+                                .retry_guard
+                                .mark()
+                            {
                                 // SAFETY state is Unpin, and fut is dropped
                                 let this = &mut unsafe { Pin::get_unchecked_mut(self.as_mut()) };
                                 this.state = Some(res);
@@ -307,7 +337,10 @@ impl Handler<Daemon> for ProgramActor {
                     }
                 } else {
                     // SAFETY state is Unpin
-                    let state = unsafe { Pin::get_unchecked_mut(self.as_mut()) }.state.take().expect("no state available");
+                    let state = unsafe { Pin::get_unchecked_mut(self.as_mut()) }
+                        .state
+                        .take()
+                        .expect("no state available");
                     // No fut created, create from factory
                     let fut = (self.factory)(state);
                     // SAFETY we put fut into its slot
