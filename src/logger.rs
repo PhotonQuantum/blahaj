@@ -29,8 +29,8 @@ impl Actor for LoggerActor {
 impl StreamHandler<ChildOutput> for LoggerActor {
     fn handle(&mut self, item: ChildOutput, _ctx: &mut Self::Context) {
         match item.ty {
-            IOType::Stdout => info!(?item.name, "{}", item.data),
-            IOType::Stderr => warn!(?item.name, "{}", item.data),
+            IOType::Stdout => info!("[{}] {}", item.name, item.data),
+            IOType::Stderr => warn!("[{}] {}", item.name, item.data),
         }
     }
 }
@@ -47,5 +47,16 @@ where
 
     fn handle(&mut self, msg: RegisterStdio<S>, ctx: &mut Self::Context) -> Self::Result {
         ctx.add_stream(msg.0);
+    }
+}
+
+#[derive(Debug, Message)]
+#[rtype("()")]
+pub struct Custom(pub String, pub String);
+impl Handler<Custom> for LoggerActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: Custom, _ctx: &mut Self::Context) -> Self::Result {
+        warn!("[{}] {}", msg.0, msg.1);
     }
 }

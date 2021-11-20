@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use actix::fut::{ready, wrap_future};
 use actix::{
-    Actor, ActorFuture, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message,
-    ResponseActFuture, ResponseFuture,
+    Actor, ActorFuture, ActorFutureExt, Addr, AsyncContext, Context, Handler,
+    Message, ResponseActFuture, ResponseFuture, Running, WrapFuture,
 };
 use futures::{ready, FutureExt, Stream, StreamExt};
 use tokio::io::AsyncRead;
@@ -22,7 +22,7 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 
 use crate::config::{Env, Program};
 use crate::error::Error;
-use crate::logger::{ChildOutput, IOType, LoggerActor, RegisterStdio};
+use crate::logger::{ChildOutput, Custom, IOType, LoggerActor, RegisterStdio};
 use crate::supervisor::terminate_ext::TerminateExt;
 
 #[derive(Debug)]
@@ -67,6 +67,13 @@ impl ProgramActor {
             logger,
         }
     }
+    pub fn broadcast_stopped(&mut self) {
+        self.stopped_tx
+            .take()
+            .unwrap()
+            .send(())
+            .expect("send stopped_tx signal");
+    }
 }
 
 fn build_child(program: &Program) -> Result<Child, Error> {
@@ -74,6 +81,7 @@ fn build_child(program: &Program) -> Result<Child, Error> {
     let mut command = Command::new(&cmd.cmd);
     command
         .args(&cmd.args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (var, value) in &program.env {
@@ -93,7 +101,7 @@ fn build_child(program: &Program) -> Result<Child, Error> {
 /// `Err((stop_rx, e))` if child can't be spawned, exited too quickly, or returned a non-zero exit status.
 #[derive(Message)]
 #[rtype("Result<Option<oneshot::Receiver<()>>, (oneshot::Receiver<()>, Error)>")]
-struct Run(oneshot::Receiver<()>);
+pub struct Run(oneshot::Receiver<()>);
 
 impl Handler<Run> for ProgramActor {
     type Result =
@@ -256,7 +264,7 @@ impl Handler<Terminate> for ProgramActor {
 /// Keep the program running until retry limits reached or terminate signal received.
 #[derive(Message)]
 #[rtype("()")]
-struct Daemon(oneshot::Receiver<()>);
+pub struct Daemon(oneshot::Receiver<()>);
 
 impl Handler<Daemon> for ProgramActor {
     type Result = ResponseActFuture<Self, ()>;
@@ -269,20 +277,23 @@ impl Handler<Daemon> for ProgramActor {
                 let res = res.expect("self is alive");
                 match res {
                     Ok(Some(stop_rx)) => {
-                        // TODO log success exit
+                        act.logger
+                            .do_send(Custom(act.name.clone(), String::from("exit with 0")));
                         Some(stop_rx)
                     }
                     Ok(None) => {
                         // terminate signal received
-                        act.stopped_tx
-                            .take()
-                            .unwrap()
-                            .send(())
-                            .expect("send stopped_tx signal");
+                        act.logger.do_send(Custom(
+                            act.name.clone(),
+                            String::from("terminated by signal"),
+                        ));
                         None
                     }
-                    Err((stop_rx, _e)) => {
-                        // TODO log failure exit
+                    Err((stop_rx, e)) => {
+                        act.logger.do_send(Custom(
+                            act.name.clone(),
+                            format!("exit with error: {:?}", e),
+                        ));
                         Some(stop_rx)
                     }
                 }
@@ -356,6 +367,7 @@ impl Handler<Daemon> for ProgramActor {
                     let fut = (self.factory)(state);
                     // SAFETY we put fut into its slot
                     unsafe { Pin::get_unchecked_mut(self.as_mut()) }.fut = Some(fut);
+                    task.waker().wake_by_ref();
                     Poll::Pending
                 }
             }
@@ -365,7 +377,10 @@ impl Handler<Daemon> for ProgramActor {
             tolerance_interval: Duration::from_secs(10), // TODO make it configurable
             tolerance_count: self.program.retries.unwrap_or(usize::MAX),
         };
-        Box::pin(RepeatedActFut::new(one_round_fut, stop_rx, retry_guard))
+        Box::pin(
+            RepeatedActFut::new(one_round_fut, stop_rx, retry_guard)
+                .map(|_, act, _| act.broadcast_stopped()),
+        )
     }
 }
 

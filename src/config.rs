@@ -13,16 +13,16 @@ use crate::error::Error::CommandError;
 
 #[derive(Deserialize)]
 pub struct Config {
-    bind: SocketAddr,
-    programs: HashMap<String, Program>,
+    pub bind: SocketAddr,
+    pub programs: HashMap<String, Program>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Program {
     pub command: CommandLine,
-    #[serde(alias = "environment")]
+    #[serde(alias = "environment", default)]
     pub env: HashMap<String, Option<Env>>,
-    pub http: HttpRelay,
+    pub http: Option<HttpRelay>,
     pub retries: Option<usize>,
 }
 
