@@ -334,6 +334,7 @@ impl Handler<Daemon> for ProgramActor {
                                 let this = &mut unsafe { Pin::get_unchecked_mut(self.as_mut()) };
                                 this.state = Some(res);
                                 this.fut = None;
+                                task.waker().wake_by_ref();
                                 Poll::Pending
                             } else {
                                 // retry limit exceeds, bail out
