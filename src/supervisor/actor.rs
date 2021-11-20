@@ -40,11 +40,12 @@ impl RetryGuard {
     }
 
     /// Mark current event.
-    /// Returns `false` if the upperbound is exceeded.
+    /// Returns `false` if the upperbound is reached.
     fn mark(&mut self) -> bool {
         let now = Instant::now();
+        self.retries.push_back(now);
         self.evict(now - self.tolerance_interval);
-        self.retries.len() <= self.tolerance_count
+        self.retries.len() < self.tolerance_count
     }
 }
 
