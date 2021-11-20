@@ -134,7 +134,7 @@ impl Handler<Run> for ProgramActor {
                         let wait_fut_ref = unsafe { Pin::new_unchecked(wait_fut.deref_mut()) };
                         match wait_fut_ref.poll(cx) {
                             Poll::Ready(res) => Poll::Ready(if let Ok(res) = res {
-                                if res.success() {
+                                if !res.success() {
                                     Err((stop_rx, Error::NonZeroExitError(res.code().unwrap_or(0))))
                                 } else {
                                     Ok(Ok(stop_rx))
