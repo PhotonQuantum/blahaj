@@ -1,5 +1,5 @@
 use actix::dev::Stream;
-use actix::{Actor, AsyncContext, Context, Handler, Message, StreamHandler};
+use actix::{Actor, AsyncContext, Context, Handler, Message, Running, StreamHandler};
 use tracing::{info, warn};
 
 #[derive(Debug)]
@@ -20,6 +20,10 @@ pub struct ChildOutput {
 
 impl Actor for LoggerActor {
     type Context = Context<Self>;
+
+    fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
+        Running::Continue
+    }
 }
 
 impl StreamHandler<ChildOutput> for LoggerActor {
