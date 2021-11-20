@@ -214,32 +214,42 @@ impl Handler<Run> for ProgramActor {
     }
 }
 
-/// Send terminate signal to child, and wait until it exits.
+/// Wait for the child to exit.
 #[derive(Message)]
 #[rtype("()")]
-struct Terminate;
+pub struct Wait;
 
-impl Handler<Terminate> for ProgramActor {
+impl Handler<Wait> for ProgramActor {
     type Result = ResponseFuture<()>;
 
-    fn handle(&mut self, _: Terminate, _: &mut Self::Context) -> Self::Result {
-        if let Some(stop_tx) = self.stop_tx.take() {
-            // The child is still running, wait for stopped_rx.
-            stop_tx.send(()).expect("send stop signal");
-            let mut stopped_rx = self.stopped_tx.as_ref().unwrap().subscribe();
-            Box::pin(async move {
-                drop(stopped_rx.recv());
-            })
-        } else if let Some(stopped_tx) = &self.stopped_tx {
+    fn handle(&mut self, _: Wait, _: &mut Self::Context) -> Self::Result {
+        if let Some(stopped_tx) = &self.stopped_tx {
             // The child is terminating, wait for stopped_rx.
             let mut stopped_rx = stopped_tx.subscribe();
             Box::pin(async move {
-                drop(stopped_rx.recv());
+                drop(stopped_rx.recv().await);
             })
         } else {
             // The child is terminated.
             Box::pin(ready(()))
         }
+    }
+}
+
+/// Send terminate signal to child, and wait until it exits.
+#[derive(Message)]
+#[rtype("()")]
+pub struct Terminate;
+
+impl Handler<Terminate> for ProgramActor {
+    type Result = ResponseFuture<()>;
+
+    fn handle(&mut self, _: Terminate, ctx: &mut Self::Context) -> Self::Result {
+        if let Some(stop_tx) = self.stop_tx.take() {
+            // The child is still running, wait for stopped_rx.
+            stop_tx.send(()).expect("send stop signal");
+        }
+        Box::pin(ctx.address().send(Wait).map(|_| ()))
     }
 }
 
