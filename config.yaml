@@ -1,0 +1,11 @@
+bind: "0.0.0.0:8000"
+programs:
+  sleep:
+    command: sleep 5
+  something:
+    command: bash -c ./tests/scripts/print_something.sh
+  somethingelse:
+    command: bash -c ./tests/scripts/print_something.sh
+  quick-fail:
+    command: sleep 1
+    retries: 3

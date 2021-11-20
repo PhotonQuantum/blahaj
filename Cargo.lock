@@ -290,6 +290,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "shlex",
+ "signal-hook",
  "signal-hook-tokio",
  "thiserror",
  "tokio",
@@ -1244,6 +1245,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6c5d32165ff8b94e68e7b3bdecb1b082e958c22434b363482cfb89dcd6f3ff8"
 dependencies = [
+ "futures-core",
  "libc",
  "signal-hook",
  "tokio",

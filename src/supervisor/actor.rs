@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use actix::fut::{ready, wrap_future};
 use actix::{
-    Actor, ActorFuture, ActorFutureExt, Addr, AsyncContext, Context, Handler,
-    Message, ResponseActFuture, ResponseFuture, Running, WrapFuture,
+    Actor, ActorFuture, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message,
+    ResponseActFuture, ResponseFuture, Running, WrapFuture,
 };
 use futures::{ready, FutureExt, Stream, StreamExt};
 use tokio::io::AsyncRead;
@@ -69,6 +69,7 @@ impl ProgramActor {
         }
     }
     pub fn broadcast_stopped(&mut self) {
+        self.stop_tx = None;
         self.stopped_tx
             .take()
             .unwrap()

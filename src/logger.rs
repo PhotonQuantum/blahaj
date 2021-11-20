@@ -53,6 +53,7 @@ where
 #[derive(Debug, Message)]
 #[rtype("()")]
 pub struct Custom(pub String, pub String);
+
 impl Handler<Custom> for LoggerActor {
     type Result = ();
 
