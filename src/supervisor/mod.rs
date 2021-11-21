@@ -1,4 +1,4 @@
-use actix::{Actor, Addr, Context, Handler, Message, ResponseFuture, Running};
+use actix::{Actor, Addr, Context, Handler, Message, ResponseFuture};
 use futures::{future, FutureExt};
 
 use actor::ProgramActor;
@@ -8,6 +8,8 @@ use crate::logger::LoggerActor;
 use crate::supervisor::actor::{Terminate, Wait};
 
 mod actor;
+mod futs;
+mod retry;
 mod terminate_ext;
 
 #[derive(Debug)]
@@ -39,14 +41,14 @@ impl Handler<TerminateAll> for Supervisor {
     type Result = ();
 
     fn handle(&mut self, _: TerminateAll, _: &mut Self::Context) -> Self::Result {
-        self.actors.iter().for_each(|addr| addr.do_send(Terminate))
+        self.actors.iter().for_each(|addr| addr.do_send(Terminate));
     }
 }
 
 impl Supervisor {
     pub fn start(
         programs: impl IntoIterator<Item = (String, Program)>,
-        logger: Addr<LoggerActor>,
+        logger: &Addr<LoggerActor>,
     ) -> Self {
         Self {
             actors: programs

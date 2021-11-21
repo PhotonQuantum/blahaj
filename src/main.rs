@@ -1,4 +1,5 @@
 #![allow(clippy::enum_variant_names)]
+#![allow(clippy::module_name_repetitions)]
 
 use std::fs::File;
 
@@ -17,13 +18,13 @@ mod supervisor;
 
 #[actix::main]
 async fn main() {
-    tracing_subscriber::fmt().init();
+    pretty_env_logger::init();
     let f = File::open("config.yaml").unwrap();
     let config: Config = serde_yaml::from_reader(f).expect("config");
     let logger = LoggerActor.start();
-    let supervisor = Supervisor::start(config.programs, logger);
+    let supervisor = Supervisor::start(config.programs, &logger);
     let supervisor_addr: Addr<Supervisor> = supervisor.start();
-    let handler = SignalHandler::new(supervisor_addr.clone());
+    let handler = SignalHandler::new(supervisor_addr.clone(), logger);
     let _handler_addr = handler.start();
     supervisor_addr.send(Join).await.expect("join");
     println!("joined");

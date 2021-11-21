@@ -54,7 +54,7 @@ impl FromStr for CommandLine {
         let mut lexer = Shlex::new(s);
         let cmd = lexer.next().ok_or(CommandError)?;
         let args = lexer.collect();
-        Ok(CommandLine { cmd, args })
+        Ok(Self { cmd, args })
     }
 }
 
