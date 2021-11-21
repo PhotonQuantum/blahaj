@@ -20,10 +20,6 @@ pub struct ChildOutput {
 
 impl Actor for LoggerActor {
     type Context = Context<Self>;
-
-    fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
-        Running::Continue
-    }
 }
 
 impl StreamHandler<ChildOutput> for LoggerActor {
@@ -33,6 +29,8 @@ impl StreamHandler<ChildOutput> for LoggerActor {
             IOType::Stderr => warn!("[{}] {}", item.name, item.data),
         }
     }
+
+    fn finished(&mut self, _: &mut Self::Context) {}
 }
 
 #[derive(Debug, Message)]
