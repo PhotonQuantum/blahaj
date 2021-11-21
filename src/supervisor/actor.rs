@@ -1,13 +1,15 @@
 use std::collections::VecDeque;
 use std::env;
+use std::future::Future;
 use std::process::Stdio;
 use std::time::Duration;
 
 use actix::fut::{ready, wrap_future};
 use actix::{
     Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message, ResponseActFuture,
-    ResponseFuture,
+    ResponseFuture, WrapFuture,
 };
+use futures::future::Either;
 use futures::{FutureExt, Stream, StreamExt};
 use log::Level;
 use tokio::io::AsyncRead;
@@ -41,10 +43,27 @@ fn wrap_stream(
     })
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum HealthState {
+    Healthy,
+    Unhealthy,
+    Unknown,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Lifecycle {
+    Starting,
+    Running(HealthState),
+    Terminating,
+    Terminated,
+}
+
+/// Handles the lifecycle of a child, and book-keeping its status.
 #[derive(Debug)]
 pub struct ProgramActor {
     name: String,
     program: Program,
+    status: Lifecycle,
     stop_tx: Option<oneshot::Sender<()>>,
     stopped_tx: Option<broadcast::Sender<()>>,
     logger: Addr<LoggerActor>,
@@ -55,6 +74,7 @@ impl ProgramActor {
         Self {
             name,
             program,
+            status: Lifecycle::Terminated,
             stop_tx: None,
             stopped_tx: None,
             logger,
@@ -99,9 +119,15 @@ pub struct Run(oneshot::Receiver<()>);
 
 type OKType = Option<oneshot::Receiver<()>>;
 type ErrType = (oneshot::Receiver<()>, Error);
+type FutOutputType = <WaitAbortFut as Future>::Output;
+
+enum SpawnRunOutput {
+    Success(FutOutputType),
+    Failure(ErrType),
+}
 
 impl Handler<Run> for ProgramActor {
-    type Result = ResponseFuture<Result<OKType, ErrType>>;
+    type Result = ResponseActFuture<Self, Result<OKType, ErrType>>;
 
     fn handle(&mut self, msg: Run, _: &mut Self::Context) -> Self::Result {
         let stop_rx = msg.0;
@@ -109,46 +135,57 @@ impl Handler<Run> for ProgramActor {
 
         let logger = self.logger.clone();
         let name = self.name.clone();
-        Box::pin(async move {
-            match build_child(&program) {
-                Ok(mut child) => {
-                    let stdout = wrap_stream(
-                        child.stdout.take().expect("child stdout"),
-                        name.clone(),
-                        IOType::Stdout,
-                    );
-                    let stderr = wrap_stream(
-                        child.stderr.take().expect("child stderr"),
-                        name,
-                        IOType::Stderr,
-                    );
-                    logger
-                        .send(RegisterStdio(stdout))
-                        .await
-                        .expect("register stdout logger");
-                    logger
-                        .send(RegisterStdio(stderr))
-                        .await
-                        .expect("register stderr logger");
 
-                    let res = WaitAbortFut::new(child, stop_rx).await;
-                    match res {
-                        Ok(Err(mut child)) => {
-                            if tokio::time::timeout(Duration::from_secs(5), child.terminate())
-                                .await
-                                .is_err()
-                            {
-                                drop(child.kill().await);
-                            }
-                            Ok(None)
-                        }
-                        Ok(Ok(stop_rx)) => Ok(Some(stop_rx)),
-                        Err(e) => Err(e),
-                    }
-                }
-                Err(e) => Err((stop_rx, e)),
+        self.status = Lifecycle::Starting;
+        match build_child(&program) {
+            Ok(mut child) => {
+                let stdout = wrap_stream(
+                    child.stdout.take().expect("child stdout"),
+                    name.clone(),
+                    IOType::Stdout,
+                );
+                let stderr = wrap_stream(
+                    child.stderr.take().expect("child stderr"),
+                    name,
+                    IOType::Stderr,
+                );
+                logger.do_send(RegisterStdio(stdout));
+                logger.do_send(RegisterStdio(stderr));
+                self.status = Lifecycle::Running(HealthState::Unknown);
+                Either::Left(WaitAbortFut::new(child, stop_rx).map(SpawnRunOutput::Success))
             }
+            Err(e) => Either::Right(ready(SpawnRunOutput::Failure((stop_rx, e)))),
+        }
+        .into_actor(self)
+        .map(|res: SpawnRunOutput, act, _| {
+            if matches!(res, SpawnRunOutput::Success(Ok(Err(_)))) {
+                act.status = Lifecycle::Terminating;
+            }
+            res
         })
+        .then(|res, act, _| {
+            async move {
+                match res {
+                    SpawnRunOutput::Success(Ok(Err(mut child))) => {
+                        if tokio::time::timeout(Duration::from_secs(5), child.terminate())
+                            .await
+                            .is_err()
+                        {
+                            drop(child.kill().await);
+                        }
+                        Ok(None)
+                    }
+                    SpawnRunOutput::Success(Ok(Ok(stop_rx))) => Ok(Some(stop_rx)),
+                    SpawnRunOutput::Success(Err(e)) | SpawnRunOutput::Failure(e) => Err(e),
+                }
+            }
+            .into_actor(act)
+        })
+        .map(|res, act, _| {
+            act.status = Lifecycle::Terminated;
+            res
+        })
+        .boxed_local()
     }
 }
 
@@ -208,21 +245,21 @@ impl Handler<Daemon> for ProgramActor {
                 match res {
                     Ok(Some(stop_rx)) => {
                         act.logger
-                            .do_send(Custom::new(act.name.clone(), String::from("exit with 0")));
+                            .do_send(Custom::new(act.name.clone(), "Exits without error."));
                         Some(stop_rx)
                     }
                     Ok(None) => {
                         // terminate signal received
                         act.logger.do_send(Custom::new(
                             act.name.clone(),
-                            String::from("terminated by signal"),
+                            String::from("Terminated by exit signal."),
                         ));
                         None
                     }
                     Err((stop_rx, e)) => {
                         act.logger.do_send(Custom::new(
                             act.name.clone(),
-                            format!("exit with error: {:?}", e),
+                            format!("Exits with error: {}.", e),
                         ));
                         Some(stop_rx)
                     }
@@ -235,8 +272,8 @@ impl Handler<Daemon> for ProgramActor {
             Duration::from_secs(10), // TODO make it configurable
             self.program.retries.unwrap_or(usize::MAX),
         );
-        Box::pin(
-            RepeatedActFut::new(one_round_fut, stop_rx, retry_guard).map(|res, act, _| {
+        RepeatedActFut::new(one_round_fut, stop_rx, retry_guard)
+            .map(|res, act, _| {
                 if !res {
                     act.logger.do_send(Custom::new_with_level(
                         Level::Error,
@@ -245,8 +282,8 @@ impl Handler<Daemon> for ProgramActor {
                     ));
                 }
                 act.broadcast_stopped();
-            }),
-        )
+            })
+            .boxed_local()
     }
 }
 
