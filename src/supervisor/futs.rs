@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::task::Poll;
 
 use actix::{Actor, ActorFuture};
-use futures::{FutureExt, ready};
+use futures::{ready, FutureExt};
 use signal_hook::low_level::signal_name;
 use tokio::process::Child;
 use tokio::sync::oneshot;
@@ -37,11 +37,11 @@ impl<F, Fut, I> RepeatedActFut<F, Fut, I> {
 }
 
 impl<A, Fut, F, I> ActorFuture<A> for RepeatedActFut<F, Fut, I>
-    where
-        A: Actor,
-        Fut: ActorFuture<A, Output=Option<I>>,
-        F: Fn(I) -> Fut + Unpin,
-        I: Unpin,
+where
+    A: Actor,
+    Fut: ActorFuture<A, Output = Option<I>>,
+    F: Fn(I) -> Fut + Unpin,
+    I: Unpin,
 {
     type Output = bool;
 
@@ -126,14 +126,16 @@ impl Future for WaitAbortFut {
                             Ok(Ok(stop_rx))
                         } else {
                             let exit_code = res.code();
-                            let err =
-                                if let Some(exit_code) = exit_code {
-                                    Error::NonZeroExitError(exit_code)
-                                } else if cfg!(unix) {
-                                    Error::ExitBySignalError(signal_name(res.signal().expect("exit signal")).unwrap_or("UNKNOWN"))
-                                } else {
-                                    Error::NonZeroExitError(-1)
-                                };
+                            let err = if let Some(exit_code) = exit_code {
+                                Error::NonZeroExitError(exit_code)
+                            } else if cfg!(unix) {
+                                Error::ExitBySignalError(
+                                    signal_name(res.signal().expect("exit signal"))
+                                        .unwrap_or("UNKNOWN"),
+                                )
+                            } else {
+                                Error::NonZeroExitError(-1)
+                            };
                             Err((stop_rx, err))
                         }
                     } else {

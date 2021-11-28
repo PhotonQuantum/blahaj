@@ -14,5 +14,5 @@ pub enum Error {
     NonZeroExitError(i32),
     #[cfg(unix)]
     #[error("Child terminated by signal - {0}")]
-    ExitBySignalError(&'static str)
+    ExitBySignalError(&'static str),
 }
