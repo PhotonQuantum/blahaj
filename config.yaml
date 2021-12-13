@@ -1,5 +1,11 @@
 bind: "0.0.0.0:8000"
 programs:
+  serve:
+    command: miniserve .
+    http:
+      port: 8080
+      path: serve
+      strip-path: true
   sleep:
     command: sleep 5
   something:

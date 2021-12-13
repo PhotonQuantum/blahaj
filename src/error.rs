@@ -1,3 +1,6 @@
+use actix_web::error::PayloadError;
+use actix_web::ResponseError;
+use awc::error::SendRequestError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,3 +19,13 @@ pub enum Error {
     #[error("Child terminated by signal - {0}")]
     ExitBySignalError(&'static str),
 }
+
+#[derive(Debug, Error)]
+pub enum HttpError {
+    #[error("Unable to send request to upstream: {0}")]
+    Send(#[from] SendRequestError),
+    #[error("Unable to receive response from upstream: {0}")]
+    Receive(#[from] PayloadError),
+}
+
+impl ResponseError for HttpError {}

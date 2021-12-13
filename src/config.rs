@@ -29,9 +29,14 @@ pub struct Program {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct HttpRelay {
-    port: u16,
-    path: String,
-    health_check: String,
+    pub port: u16,
+    pub path: String,
+    #[serde(default)]
+    pub https: bool,
+    #[serde(default)]
+    pub strip_path: bool,
+    #[serde(default)]
+    pub health_check: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
