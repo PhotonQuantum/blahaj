@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::env;
 use std::future::Future;
 use std::process::Stdio;
 use std::time::Duration;
@@ -23,7 +22,7 @@ use tokio::sync::oneshot::Receiver;
 use tokio::sync::{broadcast, oneshot};
 use tokio_util::codec::{FramedRead, LinesCodec};
 
-use crate::config::{Env, Program};
+use crate::config::Program;
 use crate::error::SupervisorError;
 use crate::logger::{ChildOutput, Custom, IOType, LoggerActor, RegisterStdio};
 use crate::supervisor::futs::{RepeatedActFut, WaitAbortFut, WaitAbortResult};
@@ -129,10 +128,9 @@ fn build_child(program: &Program) -> Result<Child, SupervisorError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (var, value) in &program.env {
-        match value {
+        match &value.0 {
             None => command.env_remove(var),
-            Some(Env::Literal(s)) => command.env(var, s),
-            Some(Env::Inherit(inherited)) => command.env(var, env::var(inherited)?),
+            Some(s) => command.env(var, s),
         };
     }
     command.spawn().map_err(SupervisorError::Spawn)

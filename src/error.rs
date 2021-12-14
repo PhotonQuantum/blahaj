@@ -8,8 +8,6 @@ use thiserror::Error;
 pub enum SupervisorError {
     #[error("Invalid command Line")]
     Command,
-    #[error("Illegal inherited environment variable - {0}")]
-    Env(#[from] std::env::VarError),
     #[error("Unable to spawn child - {0}")]
     Spawn(std::io::Error),
     #[error("Child exited too quickly")]
