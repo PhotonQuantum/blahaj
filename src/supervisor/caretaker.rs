@@ -403,7 +403,7 @@ impl Handler<SetHealthState> for CaretakerActor {
     type Result = ();
 
     fn handle(&mut self, msg: SetHealthState, _ctx: &mut Self::Context) -> Self::Result {
-        if matches!(self.status, Lifecycle::Running(_)) {
+        if matches!(self.status, Lifecycle::Running(_) | Lifecycle::Starting) {
             self.status = Lifecycle::Running(msg.0);
         }
     }
