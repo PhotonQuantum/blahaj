@@ -9,6 +9,7 @@ use actix::{
     Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message, ResponseActFuture,
     ResponseFuture, WrapFuture,
 };
+use actix_signal::AddrSignalExt;
 use awc::http::uri::Scheme;
 use awc::http::Uri;
 use awc::Client;
@@ -197,44 +198,49 @@ impl Handler<Run> for CaretakerActor {
                 logger.do_send(RegisterStdio(stdout));
                 logger.do_send(RegisterStdio(stderr));
 
+                // Setup health actor.
                 let (unhealthy_tx, unhealthy_rx) = oneshot::channel();
-                if let Some((http, check)) = self
+                let config = self
                     .program
                     .http
                     .as_ref()
                     .and_then(|http| http.health_check.as_ref().map(|check| (http, check)))
-                {
-                    self.status = Lifecycle::Running(HealthState::Unknown);
-                    let uri = uri_for_check(http.https, http.port, check.path.as_str());
-                    let config = HealthConfig {
-                        uri,
-                        interval: check.interval,
-                        grace_period: check.grace,
-                    };
-                    let health_actor = HealthActor::new(
-                        self.name.clone(),
-                        self.client.clone(),
-                        config,
-                        unhealthy_tx,
-                        ctx.address(),
-                        self.logger.clone(),
-                    );
-                    health_actor.start();
-                } else {
-                    self.status = Lifecycle::Running(HealthState::Healthy);
-                }
+                    .map(|(http, check)| {
+                        self.status = Lifecycle::Running(HealthState::Unknown);
+                        let uri = uri_for_check(http.https, http.port, check.path.as_str());
+                        HealthConfig {
+                            uri,
+                            interval: check.interval,
+                            grace_period: check.grace,
+                        }
+                    });
+                let health_actor = HealthActor::new(
+                    self.name.clone(),
+                    self.client.clone(),
+                    config,
+                    unhealthy_tx,
+                    ctx.address(),
+                    self.logger.clone(),
+                );
+                let health_addr = health_actor.start();
 
                 // Handle the child and stop handler to WaitAbortFut.
                 Either::Left(
-                    WaitAbortFut::new(child, stop_rx, unhealthy_rx).map(SpawnRunOutput::Success),
+                    WaitAbortFut::new(child, stop_rx, unhealthy_rx)
+                        .map(SpawnRunOutput::Success)
+                        .map(move |res| (res, Some(health_addr))),
                 )
             }
             // Failed to spawn child, return error.
-            Err(e) => Either::Right(ready(SpawnRunOutput::Failure((stop_rx, e)))),
+            Err(e) => Either::Right(ready((SpawnRunOutput::Failure((stop_rx, e)), None))),
         }
         .into_actor(self)
-        .map(|res: SpawnRunOutput, act, _| {
+        .map(|(res, health_addr), act, _| {
             // WaitAbortFut resolves (or child spawn error).
+            if let Some(health_addr) = health_addr {
+                health_addr.stop(); // Stop health actor.
+            }
+
             if matches!(
                 res,
                 SpawnRunOutput::Success(

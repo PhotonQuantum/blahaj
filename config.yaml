@@ -8,8 +8,8 @@ programs:
       strip-path: true
       health-check:
         path: /non-exist
-  # sleep:
-  #   command: sleep 5
+  sleep:
+    command: sleep 5
   # something:
   #   command: bash -c ./tests/scripts/print_something.sh
   # somethingelse:
