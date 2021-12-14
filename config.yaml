@@ -6,6 +6,8 @@ programs:
       port: 8080
       path: serve
       strip-path: true
+      health-check:
+        path: /non-exist
   # sleep:
   #   command: sleep 5
   # something:

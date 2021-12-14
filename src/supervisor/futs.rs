@@ -9,9 +9,9 @@ use actix::{Actor, ActorFuture};
 use futures::{ready, FutureExt};
 use signal_hook::low_level::signal_name;
 use tokio::process::Child;
-use tokio::sync::oneshot;
+use tokio::sync::oneshot::Receiver;
 
-use crate::error::Error;
+use crate::error::SupervisorError;
 
 use super::retry::RetryGuard;
 
@@ -96,54 +96,74 @@ where
 
 pub struct WaitAbortFut {
     child: Option<Child>,
-    stop_rx: Option<oneshot::Receiver<()>>,
+    stop_rx: Option<Receiver<()>>,
+    unhealthy_rx: Option<Receiver<()>>,
 }
 
 impl WaitAbortFut {
-    pub fn new(child: Child, stop_rx: oneshot::Receiver<()>) -> Self {
+    pub fn new(child: Child, stop_rx: Receiver<()>, unhealthy_rx: Receiver<()>) -> Self {
         Self {
             child: Some(child),
             stop_rx: Some(stop_rx),
+            unhealthy_rx: Some(unhealthy_rx),
         }
     }
 }
 
+/// Return value of `WaitAbortFut`.
+pub enum WaitAbortResult {
+    /// Unhealthy signal received. Return signal handle and child handle.
+    UnhealthySignalReceived(Receiver<()>, Child),
+    /// Stop signal received. Return child handle.
+    StopSignalReceived(Child),
+    /// Process exited without error. Return signal handle.
+    Exit(Receiver<()>),
+    /// Process exited with error. Return signal handle and error.
+    ExitWithError((Receiver<()>, SupervisorError)),
+}
+
 impl Future for WaitAbortFut {
-    type Output = Result<Result<oneshot::Receiver<()>, Child>, (oneshot::Receiver<()>, Error)>;
+    type Output = WaitAbortResult;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        let mut child = self.child.take().expect("polled twice");
-        let mut stop_rx = self.stop_rx.take().expect("polled twice");
-        match stop_rx.poll_unpin(cx) {
-            Poll::Ready(_) => Poll::Ready(Ok(Err(child))),
-            Poll::Pending => {
+        // These unwraps shouldn't fail because we either initialized them or we put them back before returning `Pending`.
+        let mut child = self.child.take().unwrap();
+        let mut stop_rx = self.stop_rx.take().unwrap();
+        let mut unhealthy_rx = self.unhealthy_rx.take().unwrap();
+        match (stop_rx.poll_unpin(cx), unhealthy_rx.poll_unpin(cx)) {
+            (Poll::Ready(_), _) => Poll::Ready(WaitAbortResult::StopSignalReceived(child)),
+            (_, Poll::Ready(_)) => {
+                Poll::Ready(WaitAbortResult::UnhealthySignalReceived(stop_rx, child))
+            }
+            (Poll::Pending, Poll::Pending) => {
                 // SAFETY we know that child.wait() doesn't have drop side effect.
                 let mut wait_fut = ManuallyDrop::new(child.wait());
                 let wait_fut_ref = unsafe { Pin::new_unchecked(&mut *wait_fut) };
                 match wait_fut_ref.poll(cx) {
                     Poll::Ready(res) => Poll::Ready(if let Ok(res) = res {
                         if res.success() {
-                            Ok(Ok(stop_rx))
+                            WaitAbortResult::Exit(stop_rx)
                         } else {
                             let exit_code = res.code();
                             let err = if let Some(exit_code) = exit_code {
-                                Error::NonZeroExitError(exit_code)
+                                SupervisorError::NonZeroExit(exit_code)
                             } else if cfg!(unix) {
-                                Error::ExitBySignalError(
+                                SupervisorError::ExitBySignal(
                                     signal_name(res.signal().expect("exit signal"))
                                         .unwrap_or("UNKNOWN"),
                                 )
                             } else {
-                                Error::NonZeroExitError(-1)
+                                SupervisorError::NonZeroExit(-1)
                             };
-                            Err((stop_rx, err))
+                            WaitAbortResult::ExitWithError((stop_rx, err))
                         }
                     } else {
-                        Err((stop_rx, Error::AlreadyDiedError))
+                        WaitAbortResult::ExitWithError((stop_rx, SupervisorError::AlreadyDied))
                     }),
                     Poll::Pending => {
                         self.child = Some(child);
                         self.stop_rx = Some(stop_rx);
+                        self.unhealthy_rx = Some(unhealthy_rx);
                         Poll::Pending
                     }
                 }

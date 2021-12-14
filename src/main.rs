@@ -1,5 +1,8 @@
-#![allow(clippy::enum_variant_names)]
-#![allow(clippy::module_name_repetitions)]
+#![allow(
+    clippy::enum_variant_names,
+    clippy::module_name_repetitions,
+    clippy::future_not_send
+)]
 
 use std::fs::File;
 
@@ -30,7 +33,8 @@ async fn main() -> std::io::Result<()> {
     let config: Config = serde_yaml::from_reader(f).expect("config");
     let logger = LoggerActor.start();
 
-    let supervisor = Supervisor::start(config.programs.clone(), &logger);
+    let client = Client::new();
+    let supervisor = Supervisor::start(config.programs.clone(), &client, &logger);
     let supervisor_addr: Addr<Supervisor> = supervisor.start();
 
     let signal_handler = SignalHandler::new(supervisor_addr.clone(), logger);

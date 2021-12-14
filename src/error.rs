@@ -1,31 +1,40 @@
 use actix_web::error::PayloadError;
 use actix_web::ResponseError;
 use awc::error::SendRequestError;
+use awc::http::StatusCode;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum SupervisorError {
     #[error("Invalid command Line")]
-    CommandError,
+    Command,
     #[error("Illegal inherited environment variable - {0}")]
-    EnvError(#[from] std::env::VarError),
+    Env(#[from] std::env::VarError),
     #[error("Unable to spawn child - {0}")]
-    SpawnError(std::io::Error),
+    Spawn(std::io::Error),
     #[error("Child exited too quickly")]
-    AlreadyDiedError,
+    AlreadyDied,
     #[error("Child exited with non-zero exit code - {0}")]
-    NonZeroExitError(i32),
+    NonZeroExit(i32),
     #[cfg(unix)]
     #[error("Child terminated by signal - {0}")]
-    ExitBySignalError(&'static str),
+    ExitBySignal(&'static str),
 }
 
 #[derive(Debug, Error)]
 pub enum HttpError {
-    #[error("Unable to send request to upstream: {0}")]
+    #[error("Unable to send request to upstream - {0}")]
     Send(#[from] SendRequestError),
-    #[error("Unable to receive response from upstream: {0}")]
+    #[error("Unable to receive response from upstream - {0}")]
     Receive(#[from] PayloadError),
 }
 
 impl ResponseError for HttpError {}
+
+#[derive(Debug, Error)]
+pub enum HealthError {
+    #[error("Unable to send request to upstream - {0}")]
+    Send(SendRequestError),
+    #[error("Non-success response status code - {0}")]
+    Status(StatusCode),
+}

@@ -9,6 +9,9 @@ use actix::{
     Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message, ResponseActFuture,
     ResponseFuture, WrapFuture,
 };
+use awc::http::uri::Scheme;
+use awc::http::Uri;
+use awc::Client;
 use futures::future::Either;
 use futures::{FutureExt, Stream, StreamExt};
 use log::Level;
@@ -19,9 +22,10 @@ use tokio::sync::{broadcast, oneshot};
 use tokio_util::codec::{FramedRead, LinesCodec};
 
 use crate::config::{Env, Program};
-use crate::error::Error;
+use crate::error::SupervisorError;
 use crate::logger::{ChildOutput, Custom, IOType, LoggerActor, RegisterStdio};
-use crate::supervisor::futs::{RepeatedActFut, WaitAbortFut};
+use crate::supervisor::futs::{RepeatedActFut, WaitAbortFut, WaitAbortResult};
+use crate::supervisor::health::{HealthActor, HealthConfig};
 use crate::supervisor::retry::RetryGuard;
 use crate::supervisor::terminate_ext::TerminateExt;
 
@@ -52,29 +56,41 @@ pub enum HealthState {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Lifecycle {
+    /// Process is starting.
     Starting,
+    /// Process is running.
     Running(HealthState),
+    /// Process is being terminated.
     Terminating,
+    /// Process is terminated.
     Terminated,
+    /// Process has died and no further retry is scheduled.
+    Failed,
 }
 
 /// Handles the lifecycle of a child, and book-keeping its status.
-#[derive(Debug)]
-pub struct ProgramActor {
+pub struct CaretakerActor {
     name: String,
     program: Program,
     status: Lifecycle,
+    client: Client,
     stop_tx: Option<oneshot::Sender<()>>,
     stopped_tx: Option<broadcast::Sender<()>>,
     logger: Addr<LoggerActor>,
 }
 
-impl ProgramActor {
-    pub const fn new(name: String, program: Program, logger: Addr<LoggerActor>) -> Self {
+impl CaretakerActor {
+    pub const fn new(
+        name: String,
+        program: Program,
+        client: Client,
+        logger: Addr<LoggerActor>,
+    ) -> Self {
         Self {
             name,
             program,
-            status: Lifecycle::Terminated,
+            status: Lifecycle::Starting,
+            client,
             stop_tx: None,
             stopped_tx: None,
             logger,
@@ -90,7 +106,7 @@ impl ProgramActor {
     }
 }
 
-fn build_child(program: &Program) -> Result<Child, Error> {
+fn build_child(program: &Program) -> Result<Child, SupervisorError> {
     let cmd = &program.command;
     let mut command = Command::new(&cmd.cmd);
     command
@@ -105,7 +121,7 @@ fn build_child(program: &Program) -> Result<Child, Error> {
             Some(Env::Inherit(inherited)) => command.env(var, env::var(inherited)?),
         };
     }
-    command.spawn().map_err(Error::SpawnError)
+    command.spawn().map_err(SupervisorError::Spawn)
 }
 
 /// Run this program.
@@ -114,11 +130,17 @@ fn build_child(program: &Program) -> Result<Child, Error> {
 /// `Ok(None)` if the program is ended by terminate signal.
 /// `Err((stop_rx, e))` if child can't be spawned, exited too quickly, or returned a non-zero exit status.
 #[derive(Message)]
-#[rtype("Result<Option<oneshot::Receiver<()>>, (oneshot::Receiver<()>, Error)>")]
+#[rtype("RunResult")]
 pub struct Run(oneshot::Receiver<()>);
 
-type OKType = Option<oneshot::Receiver<()>>;
-type ErrType = (oneshot::Receiver<()>, Error);
+pub enum RunResult {
+    NormalExit(oneshot::Receiver<()>),
+    Terminated,
+    Unhealthy(oneshot::Receiver<()>),
+    Error(ErrType),
+}
+
+type ErrType = (oneshot::Receiver<()>, SupervisorError);
 type FutOutputType = <WaitAbortFut as Future>::Output;
 
 enum SpawnRunOutput {
@@ -126,19 +148,42 @@ enum SpawnRunOutput {
     Failure(ErrType),
 }
 
-impl Handler<Run> for ProgramActor {
-    type Result = ResponseActFuture<Self, Result<OKType, ErrType>>;
+async fn ensure_stop(child: &mut Child, grace: Duration) {
+    if tokio::time::timeout(grace, child.terminate())
+        .await
+        .is_err()
+    {
+        // Child failed to exit in time. Kill it.
+        drop(child.kill().await);
+    }
+}
 
-    fn handle(&mut self, msg: Run, _: &mut Self::Context) -> Self::Result {
+fn uri_for_check(https: bool, port: u16, path: &str) -> Uri {
+    Uri::builder()
+        .scheme(if https { Scheme::HTTPS } else { Scheme::HTTP })
+        .authority(format!("127.0.0.1:{}", port))
+        .path_and_query(path)
+        .build()
+        .expect("must build")
+}
+
+impl Handler<Run> for CaretakerActor {
+    type Result = ResponseActFuture<Self, RunResult>;
+
+    fn handle(&mut self, msg: Run, ctx: &mut Self::Context) -> Self::Result {
         let stop_rx = msg.0;
         let program = self.program.clone();
 
         let logger = self.logger.clone();
         let name = self.name.clone();
 
+        let grace = self.program.grace;
+
+        // Spawn the child.
         self.status = Lifecycle::Starting;
         match build_child(&program) {
             Ok(mut child) => {
+                // Child spawn successful, register logger and set status.
                 let stdout = wrap_stream(
                     child.stdout.take().expect("child stdout"),
                     name.clone(),
@@ -151,37 +196,86 @@ impl Handler<Run> for ProgramActor {
                 );
                 logger.do_send(RegisterStdio(stdout));
                 logger.do_send(RegisterStdio(stderr));
-                self.status = Lifecycle::Running(HealthState::Unknown);
-                Either::Left(WaitAbortFut::new(child, stop_rx).map(SpawnRunOutput::Success))
+
+                let (unhealthy_tx, unhealthy_rx) = oneshot::channel();
+                if let Some((http, check)) = self
+                    .program
+                    .http
+                    .as_ref()
+                    .and_then(|http| http.health_check.as_ref().map(|check| (http, check)))
+                {
+                    self.status = Lifecycle::Running(HealthState::Unknown);
+                    let uri = uri_for_check(http.https, http.port, check.path.as_str());
+                    let config = HealthConfig {
+                        uri,
+                        interval: check.interval,
+                        grace_period: check.grace,
+                    };
+                    let health_actor = HealthActor::new(
+                        self.name.clone(),
+                        self.client.clone(),
+                        config,
+                        unhealthy_tx,
+                        ctx.address(),
+                        self.logger.clone(),
+                    );
+                    health_actor.start();
+                } else {
+                    self.status = Lifecycle::Running(HealthState::Healthy);
+                }
+
+                // Handle the child and stop handler to WaitAbortFut.
+                Either::Left(
+                    WaitAbortFut::new(child, stop_rx, unhealthy_rx).map(SpawnRunOutput::Success),
+                )
             }
+            // Failed to spawn child, return error.
             Err(e) => Either::Right(ready(SpawnRunOutput::Failure((stop_rx, e)))),
         }
         .into_actor(self)
         .map(|res: SpawnRunOutput, act, _| {
-            if matches!(res, SpawnRunOutput::Success(Ok(Err(_)))) {
+            // WaitAbortFut resolves (or child spawn error).
+            if matches!(
+                res,
+                SpawnRunOutput::Success(
+                    WaitAbortResult::StopSignalReceived(_)
+                        | WaitAbortResult::UnhealthySignalReceived(_, _)
+                )
+            ) {
+                // Fut resolves because it received a stop signal.
                 act.status = Lifecycle::Terminating;
             }
             res
         })
-        .then(|res, act, _| {
+        .then(move |res, act, _| {
             async move {
                 match res {
-                    SpawnRunOutput::Success(Ok(Err(mut child))) => {
-                        if tokio::time::timeout(Duration::from_secs(5), child.terminate())
-                            .await
-                            .is_err()
-                        {
-                            drop(child.kill().await);
-                        }
-                        Ok(None)
+                    SpawnRunOutput::Success(WaitAbortResult::StopSignalReceived(mut child)) => {
+                        // Fut resolves because it received a stop signal. Stop the child.
+                        ensure_stop(&mut child, grace).await;
+                        RunResult::Terminated
                     }
-                    SpawnRunOutput::Success(Ok(Ok(stop_rx))) => Ok(Some(stop_rx)),
-                    SpawnRunOutput::Success(Err(e)) | SpawnRunOutput::Failure(e) => Err(e),
+                    SpawnRunOutput::Success(WaitAbortResult::UnhealthySignalReceived(
+                        stop_rx,
+                        mut child,
+                    )) => {
+                        // Fut resolves because it received a unhealthy signal. Stop the child.
+                        ensure_stop(&mut child, grace).await;
+                        RunResult::Unhealthy(stop_rx)
+                    }
+                    // Fut resolves because the process exits without error. Retrieve the stop handler.
+                    SpawnRunOutput::Success(WaitAbortResult::Exit(stop_rx)) => {
+                        RunResult::NormalExit(stop_rx)
+                    }
+                    // Fut resolves because the process exits with an error. Retrieve the stop handler and error msg.
+                    SpawnRunOutput::Success(WaitAbortResult::ExitWithError(e))
+                    | SpawnRunOutput::Failure(e) => RunResult::Error(e),
                 }
             }
             .into_actor(act)
         })
         .map(|res, act, _| {
+            // Process now died.
             act.status = Lifecycle::Terminated;
             res
         })
@@ -194,7 +288,7 @@ impl Handler<Run> for ProgramActor {
 #[rtype("()")]
 pub struct Wait;
 
-impl Handler<Wait> for ProgramActor {
+impl Handler<Wait> for CaretakerActor {
     type Result = ResponseFuture<()>;
 
     fn handle(&mut self, _: Wait, _: &mut Self::Context) -> Self::Result {
@@ -216,7 +310,7 @@ impl Handler<Wait> for ProgramActor {
 #[rtype("()")]
 pub struct Terminate;
 
-impl Handler<Terminate> for ProgramActor {
+impl Handler<Terminate> for CaretakerActor {
     type Result = ResponseFuture<()>;
 
     fn handle(&mut self, _: Terminate, ctx: &mut Self::Context) -> Self::Result {
@@ -233,7 +327,7 @@ impl Handler<Terminate> for ProgramActor {
 #[rtype("()")]
 pub struct Daemon(oneshot::Receiver<()>);
 
-impl Handler<Daemon> for ProgramActor {
+impl Handler<Daemon> for CaretakerActor {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: Daemon, ctx: &mut Self::Context) -> Self::Result {
@@ -243,20 +337,26 @@ impl Handler<Daemon> for ProgramActor {
             wrap_future::<_, Self>(addr.send(Run(stop_rx))).map(|res, act, _| {
                 let res = res.expect("self is alive");
                 match res {
-                    Ok(Some(stop_rx)) => {
+                    RunResult::NormalExit(stop_rx) => {
                         act.logger
                             .do_send(Custom::new(act.name.clone(), "Exits without error."));
                         Some(stop_rx)
                     }
-                    Ok(None) => {
-                        // terminate signal received
+                    RunResult::Unhealthy(stop_rx) => {
                         act.logger.do_send(Custom::new(
                             act.name.clone(),
-                            String::from("Terminated by exit signal."),
+                            String::from("Terminated by caretaker."),
+                        ));
+                        Some(stop_rx)
+                    }
+                    RunResult::Terminated => {
+                        act.logger.do_send(Custom::new(
+                            act.name.clone(),
+                            String::from("Terminated by caretaker."),
                         ));
                         None
                     }
-                    Err((stop_rx, e)) => {
+                    RunResult::Error((stop_rx, e)) => {
                         act.logger.do_send(Custom::new(
                             act.name.clone(),
                             format!("Exits with error: {}.", e),
@@ -269,12 +369,13 @@ impl Handler<Daemon> for ProgramActor {
 
         let retry_guard = RetryGuard::new(
             VecDeque::new(),
-            Duration::from_secs(10), // TODO make it configurable
-            self.program.retries.unwrap_or(usize::MAX),
+            self.program.retry.window,
+            self.program.retry.count,
         );
         RepeatedActFut::new(one_round_fut, stop_rx, retry_guard)
             .map(|res, act, _| {
                 if !res {
+                    act.status = Lifecycle::Failed;
                     act.logger.do_send(Custom::new_with_level(
                         Level::Error,
                         act.name.clone(),
@@ -287,7 +388,22 @@ impl Handler<Daemon> for ProgramActor {
     }
 }
 
-impl Actor for ProgramActor {
+/// Notify the caretaker to update running status.
+#[derive(Debug, Message)]
+#[rtype("()")]
+pub struct SetHealthState(pub HealthState);
+
+impl Handler<SetHealthState> for CaretakerActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetHealthState, _ctx: &mut Self::Context) -> Self::Result {
+        if matches!(self.status, Lifecycle::Running(_)) {
+            self.status = Lifecycle::Running(msg.0);
+        }
+    }
+}
+
+impl Actor for CaretakerActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {

@@ -1,20 +1,21 @@
 use actix::{Actor, Addr, Context, Handler, Message, ResponseFuture};
+use awc::Client;
 use futures::{future, FutureExt};
 
-use actor::ProgramActor;
+use caretaker::CaretakerActor;
 
 use crate::config::Program;
 use crate::logger::LoggerActor;
-use crate::supervisor::actor::{Terminate, Wait};
+use crate::supervisor::caretaker::{Terminate, Wait};
 
-mod actor;
+mod caretaker;
 mod futs;
+mod health;
 mod retry;
 mod terminate_ext;
 
-#[derive(Debug)]
 pub struct Supervisor {
-    actors: Vec<Addr<ProgramActor>>,
+    actors: Vec<Addr<CaretakerActor>>,
 }
 
 impl Actor for Supervisor {
@@ -48,12 +49,15 @@ impl Handler<TerminateAll> for Supervisor {
 impl Supervisor {
     pub fn start(
         programs: impl IntoIterator<Item = (String, Program)>,
+        client: &Client,
         logger: &Addr<LoggerActor>,
     ) -> Self {
         Self {
             actors: programs
                 .into_iter()
-                .map(|(name, program)| ProgramActor::new(name, program, logger.clone()).start())
+                .map(|(name, program)| {
+                    CaretakerActor::new(name, program, client.clone(), logger.clone()).start()
+                })
                 .collect(),
         }
     }
