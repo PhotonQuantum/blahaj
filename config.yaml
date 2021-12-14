@@ -6,12 +6,12 @@ programs:
       port: 8080
       path: serve
       strip-path: true
-  sleep:
-    command: sleep 5
-  something:
-    command: bash -c ./tests/scripts/print_something.sh
-  somethingelse:
-    command: bash -c ./tests/scripts/print_something.sh
-  quick-fail:
-    command: sleep 1
-    retries: 3
+  # sleep:
+  #   command: sleep 5
+  # something:
+  #   command: bash -c ./tests/scripts/print_something.sh
+  # somethingelse:
+  #   command: bash -c ./tests/scripts/print_something.sh
+  # quick-fail:
+  #   command: sleep 1
+  #   retries: 3

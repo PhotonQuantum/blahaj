@@ -8,6 +8,7 @@ use actix_web::middleware::Logger;
 use actix_web::web::Data;
 use actix_web::{web, App, HttpServer};
 use awc::Client;
+use log::info;
 
 use crate::config::Config;
 use crate::ctrlc_handler::SignalHandler;
@@ -43,6 +44,7 @@ async fn main() -> std::io::Result<()> {
         config.bind,
     ));
 
+    info!("Serving at {}", config.bind);
     let server = HttpServer::new(move || {
         let client = Client::new();
         App::new()

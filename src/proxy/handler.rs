@@ -2,7 +2,6 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use awc::http::StatusCode;
 use awc::Client;
-use log::info;
 
 use crate::error::HttpError;
 use crate::proxy::ProxyConfig;
@@ -16,13 +15,11 @@ pub async fn forward(
     config: web::Data<ProxyConfig>,
     client: web::Data<Client>,
 ) -> Result<HttpResponse, HttpError> {
-    info!("trying to forward request");
     let upstream = if let Some(upstream) = config.get(incoming_request.uri()) {
         upstream
     } else {
         return Ok(HttpResponse::new(StatusCode::NOT_FOUND));
     };
-    info!("hit entry");
 
     let conn_info = &incoming_request.connection_info().clone();
     let protocol = conn_info.scheme();

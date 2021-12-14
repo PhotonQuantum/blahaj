@@ -51,7 +51,7 @@ impl ForwardedHeader {
         }
         fors.push(peer.to_string());
 
-        ForwardedHeader {
+        Self {
             by: interface.to_string(),
             for_: fors,
             host: host.to_string(),

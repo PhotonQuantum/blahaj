@@ -1,10 +1,9 @@
 use std::collections::HashMap;
+use std::iter;
 use std::net::{IpAddr, SocketAddr};
-use std::path::{Path, PathBuf};
 
 use awc::http::uri::{Authority, PathAndQuery, Scheme};
 use awc::http::Uri;
-use log::info;
 
 use crate::config::HttpRelay;
 
@@ -37,7 +36,7 @@ pub struct ProxyConfig {
     /// A map that projects requested path to upstream entry.
     ///
     /// NOTE the key must have its prefix and suffix slash trimmed.
-    map: HashMap<PathBuf, ProxyEntry>,
+    map: HashMap<String, ProxyEntry>,
     interface: IpAddr,
 }
 
@@ -48,7 +47,7 @@ impl ProxyConfig {
                 .into_iter()
                 .map(|entry: &HttpRelay| {
                     (
-                        PathBuf::from(entry.path.trim_matches('/')),
+                        entry.path.trim_matches('/').to_string(),
                         ProxyEntry::from(entry),
                     )
                 })
@@ -58,14 +57,20 @@ impl ProxyConfig {
     }
 }
 
+/// Ancestors iterator like one in Path, but without extra checks.
+///
+/// `path` must have prefix and suffix slash trimmed
+fn ancestors(path: &str) -> impl Iterator<Item = &str> {
+    iter::successors(Some(path), |prec| {
+        prec.rsplit_once("/").map(|(parent, _)| parent)
+    })
+}
+
 impl ProxyConfig {
     pub fn get(&self, incoming_req: &Uri) -> Option<Uri> {
-        info!("incoming req: {}", incoming_req);
-        let incoming_path = Path::new(incoming_req.path().trim_start_matches('/'));
-        let (matched, entry) = incoming_path
-            .ancestors()
+        let incoming_path = incoming_req.path().trim_start_matches('/');
+        let (matched, entry) = ancestors(incoming_path)
             .find_map(|path| self.map.get(path).map(|entry| (path, entry)))?;
-        info!("matched entry: {:?}", entry);
 
         let scheme = if entry.secure {
             Scheme::HTTPS
@@ -76,18 +81,14 @@ impl ProxyConfig {
         let path = format!(
             "{}/{}",
             entry.prefix_path,
-            incoming_req
-                .path()
-                .strip_prefix(&format!("/{}", matched.to_str()?))?
+            incoming_req.path().strip_prefix(&format!("/{}", matched))?
         );
-        info!("new path: {}", path);
         let path_query = if let Some(query) = incoming_req.query() {
             PathAndQuery::try_from(format!("{}?{}", path, query))
         } else {
             PathAndQuery::try_from(path)
         }
         .ok()?;
-        info!("new_path_query: {}", path_query);
 
         Some(
             Uri::builder()
