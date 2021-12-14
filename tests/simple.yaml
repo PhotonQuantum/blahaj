@@ -1,0 +1,27 @@
+bind: "$HOST:$PORT"
+programs:
+  a:
+    command: $A $B
+    env:
+      a:
+      b: env_${ENV_A}
+    http:
+      port: $A_PORT
+      path: /some_path
+      https: true
+      strip-path: true
+      health-check:
+        path: /
+        interval: 10s
+        grace: 1m
+    retry:
+      window: 5s
+      count: 2
+    grace: 20s
+  b:
+    command: b
+    http:
+      port: 8080
+      path: /some_path
+  c:
+    command: c

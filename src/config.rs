@@ -122,29 +122,47 @@ impl<'de> Visitor<'de> for EnvVisitor {
         formatter.write_str("an environment value or null")
     }
 
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: de::Error {
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
         Env::from_str(v).map_err(E::custom)
     }
 
-    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E> where E: de::Error {
+    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
         Env::from_str(v).map_err(E::custom)
     }
 
-    fn visit_string<E>(self, v: String) -> Result<Self::Value, E> where E: de::Error {
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
         Env::from_str(v.as_str()).map_err(E::custom)
     }
 
-    fn visit_none<E>(self) -> Result<Self::Value, E> where E: de::Error {
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
         Ok(Env(None))
     }
 
-    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error> where D: Deserializer<'de> {
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         deserializer.deserialize_string(self)
     }
 }
 
 impl<'de> Deserialize<'de> for Env {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         deserializer.deserialize_option(EnvVisitor)
     }
 }
@@ -206,5 +224,92 @@ impl<'de> Deserialize<'de> for CommandLine {
         D: Deserializer<'de>,
     {
         deserializer.deserialize_string(CommandLineVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::net::{IpAddr, SocketAddr};
+    use std::time::Duration;
+
+    use maplit::hashmap;
+
+    use crate::config::{
+        default_stop_grace, CommandLine, Env, HealthCheck, HttpRelay, Program, Retry,
+    };
+    use crate::Config;
+
+    #[test]
+    fn must_parse_simple() {
+        env::set_var("HOST", "0.0.0.0");
+        env::set_var("PORT", "8000");
+        env::set_var("A", "echo a");
+        env::set_var("B", "b");
+        env::set_var("ENV_A", "a");
+        env::set_var("A_PORT", "8080");
+        let config: Config =
+            serde_yaml::from_str(include_str!("../tests/simple.yaml")).expect("to parse");
+        let a = Program {
+            command: CommandLine {
+                cmd: "echo".into(),
+                args: vec!["a".into(), "b".into()],
+            },
+            env: hashmap! {"a".into() => Env(None), "b".into() => Env(Some("env_a".into()))},
+            http: Some(HttpRelay {
+                port: 8080,
+                path: "/some_path".into(),
+                https: true,
+                strip_path: true,
+                health_check: Some(HealthCheck {
+                    path: "/".into(),
+                    interval: Duration::from_secs(10),
+                    grace: Duration::from_secs(60),
+                }),
+            }),
+            retry: Retry {
+                window: Duration::from_secs(5),
+                count: 2,
+            },
+            grace: Duration::from_secs(20),
+        };
+        let b = Program {
+            command: CommandLine {
+                cmd: "b".into(),
+                args: vec![],
+            },
+            env: Default::default(),
+            http: Some(HttpRelay {
+                port: 8080,
+                path: "/some_path".into(),
+                https: false,
+                strip_path: false,
+                health_check: None,
+            }),
+            retry: Default::default(),
+            grace: default_stop_grace(),
+        };
+        let c = Program {
+            command: CommandLine {
+                cmd: "c".into(),
+                args: vec![],
+            },
+            env: Default::default(),
+            http: None,
+            retry: Default::default(),
+            grace: default_stop_grace(),
+        };
+        assert_eq!(
+            config,
+            Config {
+                bind: SocketAddr::from((IpAddr::from([0, 0, 0, 0]), 8000)),
+                api_scope: String::from("/blahaj"),
+                programs: hashmap! {
+                    "a".into() => a,
+                    "b".into() => b,
+                    "c".into() => c
+                },
+            }
+        );
     }
 }

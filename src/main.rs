@@ -1,7 +1,8 @@
 #![allow(
     clippy::enum_variant_names,
     clippy::module_name_repetitions,
-    clippy::future_not_send
+    clippy::future_not_send,
+    clippy::default_trait_access
 )]
 
 use std::fs::File;
