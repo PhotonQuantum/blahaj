@@ -7,7 +7,7 @@ programs:
       path: serve
       strip-path: true
       health-check:
-        path: /non-exist
+        path: /
   sleep:
     command: sleep 5
   # something:

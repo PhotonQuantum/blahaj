@@ -4,6 +4,7 @@ use std::future::Future;
 use std::process::Stdio;
 use std::time::Duration;
 
+use actix::dev::{MessageResponse, OneshotSender};
 use actix::fut::{ready, wrap_future};
 use actix::{
     Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message, ResponseActFuture,
@@ -67,6 +68,18 @@ pub enum Lifecycle {
     Terminated,
     /// Process has died and no further retry is scheduled.
     Failed,
+}
+
+impl<A, M> MessageResponse<A, M> for Lifecycle
+where
+    A: Actor,
+    M: Message<Result = Self>,
+{
+    fn handle(self, _: &mut A::Context, tx: Option<OneshotSender<M::Result>>) {
+        if let Some(tx) = tx {
+            let _ = tx.send(self);
+        }
+    }
 }
 
 /// Handles the lifecycle of a child, and book-keeping its status.
@@ -324,7 +337,7 @@ impl Handler<Terminate> for CaretakerActor {
             // The child is still running, wait for stopped_rx.
             stop_tx.send(()).expect("send stop signal");
         }
-        Box::pin(ctx.address().send(Wait).map(|_| ()))
+        ctx.address().send(Wait).map(|_| ()).boxed_local()
     }
 }
 
@@ -406,6 +419,19 @@ impl Handler<SetHealthState> for CaretakerActor {
         if matches!(self.status, Lifecycle::Running(_) | Lifecycle::Starting) {
             self.status = Lifecycle::Running(msg.0);
         }
+    }
+}
+
+/// Notify the caretaker to update running status.
+#[derive(Debug, Message)]
+#[rtype("Lifecycle")]
+pub struct GetStatus;
+
+impl Handler<GetStatus> for CaretakerActor {
+    type Result = Lifecycle;
+
+    fn handle(&mut self, _: GetStatus, _: &mut Self::Context) -> Self::Result {
+        self.status
     }
 }
 

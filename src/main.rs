@@ -15,12 +15,14 @@ use log::info;
 
 use crate::config::Config;
 use crate::ctrlc_handler::SignalHandler;
+use crate::endpoints::{health, status};
 use crate::logger::LoggerActor;
 use crate::proxy::ProxyConfig;
 use crate::supervisor::{Join, Supervisor};
 
 mod config;
 mod ctrlc_handler;
+mod endpoints;
 mod error;
 mod logger;
 mod proxy;
@@ -36,6 +38,7 @@ async fn main() -> std::io::Result<()> {
     let client = Client::new();
     let supervisor = Supervisor::start(config.programs.clone(), &client, &logger);
     let supervisor_addr: Addr<Supervisor> = supervisor.start();
+    let supervisor_addr_data = Data::new(supervisor_addr.clone());
 
     let signal_handler = SignalHandler::new(supervisor_addr.clone(), logger);
     let _signal_handler_addr = signal_handler.start();
@@ -55,7 +58,13 @@ async fn main() -> std::io::Result<()> {
             .wrap(Logger::default())
             .app_data(Data::new(client))
             .app_data(proxy_config.clone())
-            .default_service(web::route().to(proxy::handler::forward))
+            .app_data(supervisor_addr_data.clone())
+            .service(
+                web::scope(config.api_scope.as_str())
+                    .route("health", web::get().to(health))
+                    .route("status", web::get().to(status)),
+            )
+            .default_service(web::to(proxy::handler::forward))
     })
     .bind(config.bind)?
     .run();

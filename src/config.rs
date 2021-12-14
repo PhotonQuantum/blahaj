@@ -11,9 +11,15 @@ use shlex::Shlex;
 
 use crate::error::SupervisorError;
 
+fn default_scope() -> String {
+    String::from("/blahaj")
+}
+
 #[derive(Deserialize)]
 pub struct Config {
     pub bind: SocketAddr,
+    #[serde(default = "default_scope")]
+    pub api_scope: String,
     pub programs: HashMap<String, Program>,
 }
 
@@ -27,6 +33,7 @@ pub struct Program {
     #[serde(alias = "environment", default)]
     pub env: HashMap<String, Option<Env>>,
     pub http: Option<HttpRelay>,
+    #[serde(default)]
     pub retry: Retry,
     #[serde(with = "humantime_serde", default = "default_stop_grace")]
     pub grace: Duration,
@@ -46,6 +53,15 @@ pub struct Retry {
     pub window: Duration,
     #[serde(default = "default_retry_count")]
     pub count: usize,
+}
+
+impl Default for Retry {
+    fn default() -> Self {
+        Self {
+            window: default_retry_window(),
+            count: default_retry_count(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
