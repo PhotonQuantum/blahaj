@@ -9,7 +9,7 @@ pub enum SupervisorError {
     #[error("Invalid command Line")]
     Command,
     #[error("Unable to spawn child - {0}")]
-    Spawn(std::io::Error),
+    Spawn(#[source] std::io::Error),
     #[error("Child exited too quickly")]
     AlreadyDied,
     #[error("Child exited with non-zero exit code - {0}")]
@@ -32,7 +32,7 @@ impl ResponseError for HttpError {}
 #[derive(Debug, Error)]
 pub enum HealthError {
     #[error("Unable to send request to upstream - {0}")]
-    Send(SendRequestError),
+    Send(#[source] SendRequestError),
     #[error("Non-success response status code - {0}")]
     Status(StatusCode),
 }

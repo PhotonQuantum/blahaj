@@ -176,7 +176,7 @@ fn uri_for_check(https: bool, port: u16, path: &str) -> Uri {
         .authority(format!("127.0.0.1:{}", port))
         .path_and_query(path)
         .build()
-        .expect("must build")
+        .expect("health check uri must be legal")
 }
 
 impl Handler<Run> for CaretakerActor {

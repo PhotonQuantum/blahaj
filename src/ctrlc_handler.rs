@@ -36,7 +36,7 @@ impl Actor for SignalHandler {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        let signals = Signals::new(TERM_SIGNALS).expect("signal handler");
+        let signals = Signals::new(TERM_SIGNALS).expect("legal signals");
         self.handle = Some(signals.handle());
         ctx.add_stream(signals);
     }
