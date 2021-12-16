@@ -79,9 +79,12 @@ impl ProxyConfig {
         };
 
         let path = format!(
-            "{}/{}",
+            "/{}{}",
             entry.prefix_path,
-            incoming_req.path().strip_prefix(&format!("/{}", matched))?
+            incoming_req
+                .path()
+                .strip_prefix(&format!("/{}", matched))?
+                .trim_start_matches('/')
         );
         let path_query = if let Some(query) = incoming_req.query() {
             PathAndQuery::try_from(format!("{}?{}", path, query))

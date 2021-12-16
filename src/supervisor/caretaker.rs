@@ -174,7 +174,7 @@ fn uri_for_check(https: bool, port: u16, path: &str) -> Uri {
     Uri::builder()
         .scheme(if https { Scheme::HTTPS } else { Scheme::HTTP })
         .authority(format!("127.0.0.1:{}", port))
-        .path_and_query(path)
+        .path_and_query(format!("/{}", path.trim_start_matches('/')))
         .build()
         .expect("health check uri must be legal")
 }

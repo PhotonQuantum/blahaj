@@ -48,10 +48,10 @@ pub async fn forward(
         .get("via")
         .map(|x| x.to_str().unwrap_or(""))
         .map_or_else(
-            || format!("{version:?} proxyboi", version = version),
+            || format!("{version:?} blahaj", version = version),
             |via| {
                 format!(
-                    "{previous_via}, {version:?} proxyboi",
+                    "{previous_via}, {version:?} blahaj",
                     previous_via = via,
                     version = version
                 )
