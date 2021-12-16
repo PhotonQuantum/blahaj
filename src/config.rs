@@ -51,12 +51,18 @@ const fn default_retry_count() -> usize {
     usize::MAX
 }
 
+const fn default_retry_delay() -> Duration {
+    Duration::from_secs(1)
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Deserialize)]
 pub struct Retry {
     #[serde(with = "humantime_serde", default = "default_retry_window")]
     pub window: Duration,
     #[serde(default = "default_retry_count", deserialize_with = "with_expand_envs")]
     pub count: usize,
+    #[serde(with = "humantime_serde", default = "default_retry_delay")]
+    pub delay: Duration,
 }
 
 impl Default for Retry {
@@ -64,6 +70,7 @@ impl Default for Retry {
         Self {
             window: default_retry_window(),
             count: default_retry_count(),
+            delay: default_retry_delay(),
         }
     }
 }
@@ -270,6 +277,7 @@ mod tests {
             retry: Retry {
                 window: Duration::from_secs(5),
                 count: 2,
+                delay: Duration::from_secs(5),
             },
             grace: Duration::from_secs(20),
         };

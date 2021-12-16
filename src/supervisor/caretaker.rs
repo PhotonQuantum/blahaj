@@ -389,19 +389,24 @@ impl Handler<Daemon> for CaretakerActor {
             self.program.retry.window,
             self.program.retry.count,
         );
-        RepeatedActFut::new(one_round_fut, stop_rx, retry_guard)
-            .map(|res, act, _| {
-                if !res {
-                    act.status = Lifecycle::Failed;
-                    act.logger.do_send(Custom::new_with_level(
-                        Level::Error,
-                        act.name.clone(),
-                        String::from("Retry limits exceeded, giving up"),
-                    ));
-                }
-                act.broadcast_stopped();
-            })
-            .boxed_local()
+        RepeatedActFut::new(
+            one_round_fut,
+            stop_rx,
+            retry_guard,
+            self.program.retry.delay,
+        )
+        .map(|res, act, _| {
+            if !res {
+                act.status = Lifecycle::Failed;
+                act.logger.do_send(Custom::new_with_level(
+                    Level::Error,
+                    act.name.clone(),
+                    String::from("Retry limits exceeded, giving up"),
+                ));
+            }
+            act.broadcast_stopped();
+        })
+        .boxed_local()
     }
 }
 

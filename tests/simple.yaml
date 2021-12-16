@@ -17,6 +17,7 @@ programs:
     retry:
       window: 5s
       count: 2
+      delay: 5s
     grace: 20s
   b:
     command: b

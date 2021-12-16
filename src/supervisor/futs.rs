@@ -4,6 +4,7 @@ use std::mem::ManuallyDrop;
 use std::os::unix::process::ExitStatusExt;
 use std::pin::Pin;
 use std::task::Poll;
+use std::time::Duration;
 
 use actix::{Actor, ActorFuture};
 use futures::{ready, FutureExt};
@@ -15,23 +16,37 @@ use crate::error::SupervisorError;
 
 use super::retry::RetryGuard;
 
+#[allow(clippy::large_enum_variant)]
+enum FutureSlot<Fut> {
+    Polling(Fut),
+    Waiting(tokio::time::Sleep),
+    Empty,
+}
+
 /// Repeatedly poll a given future with a given initial state until it returns None state or
 /// retry guard fails.
 /// Resolves to `fail` if retry guard fails.
 pub struct RepeatedActFut<F, Fut, I> {
     factory: F,
-    fut: Option<Fut>,
+    fut: FutureSlot<Fut>,
     state: Option<I>,
     retry_guard: RetryGuard,
+    retry_interval: Duration,
 }
 
 impl<F, Fut, I> RepeatedActFut<F, Fut, I> {
-    pub const fn new(factory: F, initial_state: I, retry_guard: RetryGuard) -> Self {
+    pub const fn new(
+        factory: F,
+        initial_state: I,
+        retry_guard: RetryGuard,
+        retry_interval: Duration,
+    ) -> Self {
         Self {
             factory,
-            fut: None,
+            fut: FutureSlot::Empty,
             state: Some(initial_state),
             retry_guard,
+            retry_interval,
         }
     }
 }
@@ -52,44 +67,58 @@ where
         task: &mut std::task::Context<'_>,
     ) -> Poll<Self::Output> {
         // SAFETY we wrap fut into Pin again immediately after verify Option's variant
-        if let Some(fut) = &mut unsafe { Pin::get_unchecked_mut(self.as_mut()) }.fut {
-            let fut = unsafe { Pin::new_unchecked(fut) };
-            match ready!(fut.poll(srv, ctx, task)) {
-                Some(res) => {
-                    // Fut finished but need to be recreated, this means that process exited
-                    // SAFETY RetryGuard is Unpin
-                    if unsafe { Pin::get_unchecked_mut(self.as_mut()) }
-                        .retry_guard
-                        .mark()
-                    {
-                        // SAFETY state is Unpin, and fut is dropped
-                        let this = unsafe { Pin::get_unchecked_mut(self.as_mut()) };
-                        this.state = Some(res);
-                        this.fut = None;
-                        task.waker().wake_by_ref();
-                        Poll::Pending
-                    } else {
-                        // retry limit exceeds, bail out
-                        Poll::Ready(false)
+        match &mut unsafe { Pin::get_unchecked_mut(self.as_mut()) }.fut {
+            FutureSlot::Polling(fut) => {
+                let fut = unsafe { Pin::new_unchecked(fut) };
+                match ready!(fut.poll(srv, ctx, task)) {
+                    Some(res) => {
+                        // Fut finished but need to be recreated, this means that process exited
+                        // SAFETY RetryGuard is Unpin
+                        if unsafe { Pin::get_unchecked_mut(self.as_mut()) }
+                            .retry_guard
+                            .mark()
+                        {
+                            // SAFETY state is Unpin, and fut is dropped
+                            let this = unsafe { Pin::get_unchecked_mut(self.as_mut()) };
+                            this.state = Some(res);
+                            // Register the sleep future.
+                            this.fut = FutureSlot::Waiting(tokio::time::sleep(this.retry_interval));
+                            task.waker().wake_by_ref();
+                            Poll::Pending
+                        } else {
+                            // retry limit exceeds, bail out
+                            Poll::Ready(false)
+                        }
+                    }
+                    None => {
+                        // Fut fully resolves due to termination signal
+                        Poll::Ready(true)
                     }
                 }
-                None => {
-                    // Fut fully resolves due to termination signal
-                    Poll::Ready(true)
-                }
             }
-        } else {
-            // SAFETY state is Unpin
-            let state = unsafe { Pin::get_unchecked_mut(self.as_mut()) }
-                .state
-                .take()
-                .expect("no state available");
-            // No fut created, create from factory
-            let fut = (self.factory)(state);
-            // SAFETY we put fut into its slot
-            unsafe { Pin::get_unchecked_mut(self.as_mut()) }.fut = Some(fut);
-            task.waker().wake_by_ref();
-            Poll::Pending
+            FutureSlot::Waiting(fut) => {
+                let fut = unsafe { Pin::new_unchecked(fut) };
+                ready!(fut.poll(task));
+                // SAFETY state is Unpin, and fut is dropped
+                let this = unsafe { Pin::get_unchecked_mut(self.as_mut()) };
+                // Empty the slot to reinitialize the state and fut.
+                this.fut = FutureSlot::Empty;
+                task.waker().wake_by_ref();
+                Poll::Pending
+            }
+            FutureSlot::Empty => {
+                // SAFETY state is Unpin
+                let state = unsafe { Pin::get_unchecked_mut(self.as_mut()) }
+                    .state
+                    .take()
+                    .expect("no state available");
+                // No fut created, create from factory
+                let fut = (self.factory)(state);
+                // SAFETY we put fut into its slot
+                unsafe { Pin::get_unchecked_mut(self.as_mut()) }.fut = FutureSlot::Polling(fut);
+                task.waker().wake_by_ref();
+                Poll::Pending
+            }
         }
     }
 }
