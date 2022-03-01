@@ -6,7 +6,7 @@ description = "A BLÅHAJ runs in a docker, supervises your processes, and handle
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-actix = "0.12"
+actix = "0.13"
 actix-signal = { version = "0.1", features = ["derive"] }
 actix-web = "4.0.0-rc.3"
 ansi_term = "0.12"
