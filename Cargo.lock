@@ -145,9 +145,9 @@ dependencies = [
 
 [[package]]
 name = "actix-signal"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "815e5caea7d06d9f22e951ccede945802b7eab37e1780364b630fc2f6b36a1b1"
+checksum = "f4ffb36e9c5d73925aac748e3836696d7c3b8453368815af2742027a7ea58036"
 dependencies = [
  "actix",
  "actix-signal-derive",
