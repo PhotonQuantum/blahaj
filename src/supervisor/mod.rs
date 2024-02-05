@@ -24,7 +24,7 @@ impl Actor for Supervisor {
 }
 
 #[derive(Debug, Message)]
-#[rtype("()")]
+#[rtype(result = "()")]
 pub struct Join;
 
 impl Handler<Join> for Supervisor {
@@ -38,7 +38,7 @@ impl Handler<Join> for Supervisor {
 }
 
 #[derive(Debug, Message)]
-#[rtype("()")]
+#[rtype(result = "()")]
 pub struct TerminateAll;
 
 impl Handler<TerminateAll> for Supervisor {
@@ -52,7 +52,7 @@ impl Handler<TerminateAll> for Supervisor {
 }
 
 #[derive(Debug, Message)]
-#[rtype("Result<Vec<(String, Lifecycle)>, MailboxError>")]
+#[rtype(result = "Result<Vec<(String, Lifecycle)>, MailboxError>")]
 pub struct GetStatusAll;
 
 impl Handler<GetStatusAll> for Supervisor {

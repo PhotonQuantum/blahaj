@@ -142,7 +142,7 @@ fn build_child(program: &Program) -> Result<Child, SupervisorError> {
 /// `Ok(None)` if the program is ended by terminate signal.
 /// `Err((stop_rx, e))` if child can't be spawned, exited too quickly, or returned a non-zero exit status.
 #[derive(Message)]
-#[rtype("RunResult")]
+#[rtype(result = "RunResult")]
 pub struct Run(oneshot::Receiver<()>);
 
 pub enum RunResult {
@@ -302,7 +302,7 @@ impl Handler<Run> for CaretakerActor {
 
 /// Wait for the child to exit.
 #[derive(Message)]
-#[rtype("()")]
+#[rtype(result = "()")]
 pub struct Wait;
 
 impl Handler<Wait> for CaretakerActor {
@@ -324,7 +324,7 @@ impl Handler<Wait> for CaretakerActor {
 
 /// Send terminate signal to child, and wait until it exits.
 #[derive(Message)]
-#[rtype("()")]
+#[rtype(result = "()")]
 pub struct Terminate;
 
 impl Handler<Terminate> for CaretakerActor {
@@ -341,7 +341,7 @@ impl Handler<Terminate> for CaretakerActor {
 
 /// Keep the program running until retry limits reached or terminate signal received.
 #[derive(Message)]
-#[rtype("()")]
+#[rtype(result = "()")]
 pub struct Daemon(oneshot::Receiver<()>);
 
 impl Handler<Daemon> for CaretakerActor {
@@ -412,7 +412,7 @@ impl Handler<Daemon> for CaretakerActor {
 
 /// Notify the caretaker to update running status.
 #[derive(Debug, Message)]
-#[rtype("()")]
+#[rtype(result = "()")]
 pub struct SetHealthState(pub HealthState);
 
 impl Handler<SetHealthState> for CaretakerActor {
@@ -427,7 +427,7 @@ impl Handler<SetHealthState> for CaretakerActor {
 
 /// Notify the caretaker to update running status.
 #[derive(Debug, Message)]
-#[rtype("Lifecycle")]
+#[rtype(result = "Lifecycle")]
 pub struct GetStatus;
 
 impl Handler<GetStatus> for CaretakerActor {

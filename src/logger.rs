@@ -34,7 +34,7 @@ impl StreamHandler<ChildOutput> for LoggerActor {
 }
 
 #[derive(Debug, Message)]
-#[rtype("()")]
+#[rtype(result = "()")]
 pub struct RegisterStdio<S>(pub S);
 
 impl<S> Handler<RegisterStdio<S>> for LoggerActor
@@ -49,7 +49,7 @@ where
 }
 
 #[derive(Debug, Message)]
-#[rtype("()")]
+#[rtype(result = "()")]
 pub struct Custom {
     pub level: Level,
     pub name: String,
