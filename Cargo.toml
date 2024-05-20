@@ -8,7 +8,7 @@ description = "A BLÅHAJ runs in a docker, supervises your processes, and handle
 [dependencies]
 actix = "0.13"
 actix-signal = { version = "0.3", features = ["derive"] }
-actix-web = "4.3"
+actix-web = "4.6"
 ansi_term = "0.12"
 awc = { version = "3.1", features = ["rustls"] }
 clap = { version = "4.5", features = ["derive"] }
